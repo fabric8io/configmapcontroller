@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/pkg/errors"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/cache"
@@ -14,6 +15,10 @@ import (
 	"k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
+)
+
+const (
+	updateOnChangeAnnotation = "metadata.annotations.configmap.fabric8.io/update-on-change"
 )
 
 type Controller struct {
@@ -53,32 +58,18 @@ func NewController(
 		framework.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				cm := obj.(*api.ConfigMap)
-				err := configAdded(cm)
+				err := rollingUpgradeDeployments(cm, kubeClient)
 				if err != nil {
-					glog.Errorf("Add failed: %v", err)
+					glog.Errorf("failed to update deployment: %v", err)
 				}
-
 			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				cm := newObj.(*api.ConfigMap)
-				err := configUpdated(cm)
+				err := rollingUpgradeDeployments(cm, kubeClient)
 				if err != nil {
-					glog.Errorf("Add failed: %v", err)
+					glog.Errorf("failed to update deployment: %v", err)
 				}
 
-			},
-			DeleteFunc: func(obj interface{}) {
-				cm, ok := obj.(cache.DeletedFinalStateUnknown)
-				if ok {
-					// configmap key is in the form namespace/name
-					split := strings.Split(cm.Key, "/")
-					ns := split[0]
-					name := split[1]
-					err := configDeleted(ns, name)
-					if err != nil {
-						glog.Errorf("Remove failed: %v", err)
-					}
-				}
 			},
 		},
 	)
@@ -113,17 +104,43 @@ func configMapWatchFunc(c *client.Client, ns string) func(options api.ListOption
 	}
 }
 
-func configAdded(cm *api.ConfigMap) error {
-	glog.Infof("configmap added %s", cm.Name)
-	return nil
-}
+func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 
-func configUpdated(cm *api.ConfigMap) error {
-	glog.Infof("configmap updated %s", cm.Name)
-	return nil
-}
+	ns := cm.Namespace
+	configMapVersion := cm.ResourceVersion
 
-func configDeleted(ns, cm string) error {
-	glog.Infof("configmap %s deleted in namespace %s", cm, ns)
+	deployments, err := c.Deployments(ns).List(api.ListOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to list deployments")
+	}
+	for _, d := range deployments.Items {
+		// match deployments with the correct annotation
+		value, found := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+		if found {
+			// we can have multiple configmaps to update
+			update := false
+			configmaps := strings.Split(value, ",")
+			for _, cm := range configmaps {
+				containers := d.Spec.Template.Spec.Containers
+				for _, container := range containers {
+					envs := container.Env
+					for _, e := range envs {
+						match := "FABRIC8_" + strings.ToUpper(cm) + "_CONFIGMAP"
+						if e.Name == match {
+							e.Value = configMapVersion
+							update = true
+						}
+					}
+				}
+			}
+			// update the deployment if we've matched any configmaps
+			if update {
+				_, err := c.Deployments(ns).Update(&d)
+				if err != nil {
+					return errors.Wrap(err, "update deployment failed")
+				}
+			}
+		}
+	}
 	return nil
 }

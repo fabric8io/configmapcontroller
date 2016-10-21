@@ -30,7 +30,6 @@ REPOPATH ?= $(ORG)/configmapcontroller
 ROOT_PACKAGE := $(shell go list .)
 
 ORIGINAL_GOPATH := $(GOPATH)
-GOPATH := $(shell pwd)/_gopath
 
 BUILDFLAGS := -ldflags \
   " -X $(ROOT_PACKAGE)/version.Version='$(VERSION)'\
