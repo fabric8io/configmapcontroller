@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	updateOnChangeAnnotation = "metadata.annotations.configmap.fabric8.io/update-on-change"
+	updateOnChangeAnnotation = "configmap.fabric8.io/update-on-change"
 )
 
 type Controller struct {
@@ -56,24 +56,18 @@ func NewController(
 		&api.ConfigMap{},
 		resyncPeriod,
 		framework.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				cm := obj.(*api.ConfigMap)
-				err := rollingUpgradeDeployments(cm, kubeClient)
-				if err != nil {
-					glog.Errorf("failed to update deployment: %v", err)
-				}
-			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
-				cm := newObj.(*api.ConfigMap)
-				err := rollingUpgradeDeployments(cm, kubeClient)
-				if err != nil {
-					glog.Errorf("failed to update deployment: %v", err)
+				oldM := oldObj.(*api.ConfigMap)
+				newCM := newObj.(*api.ConfigMap)
+				if oldM.ResourceVersion != newCM.ResourceVersion {
+					err := rollingUpgradeDeployments(newCM, kubeClient)
+					if err != nil {
+						glog.Errorf("failed to update deployment: %v", err)
+					}
 				}
-
 			},
 		},
 	)
-
 	return &c, nil
 }
 
@@ -105,7 +99,6 @@ func configMapWatchFunc(c *client.Client, ns string) func(options api.ListOption
 }
 
 func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
-
 	ns := cm.Namespace
 	configMapVersion := cm.ResourceVersion
 
@@ -115,31 +108,43 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 	}
 	for _, d := range deployments.Items {
 		// match deployments with the correct annotation
-		value, found := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
-		if found {
+		value, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+		if value != "" {
 			// we can have multiple configmaps to update
-			update := false
 			configmaps := strings.Split(value, ",")
-			for _, cm := range configmaps {
+			for _, cmNameToUpdate := range configmaps {
+
+				configmapEnvar := "FABRIC8_" + strings.ToUpper(cmNameToUpdate) + "_CONFIGMAP"
+
 				containers := d.Spec.Template.Spec.Containers
 				for _, container := range containers {
 					envs := container.Env
+					matched := false
 					for _, e := range envs {
-						match := "FABRIC8_" + strings.ToUpper(cm) + "_CONFIGMAP"
-						if e.Name == match {
+						if e.Name == configmapEnvar {
 							e.Value = configMapVersion
-							update = true
+							matched = true
 						}
+					}
+					// if no existing env var exists lets create one
+					if !matched {
+						e := api.EnvVar{
+							Name:  configmapEnvar,
+							Value: configMapVersion,
+						}
+						//container.Env = append([]api.EnvVar{e}, container.Env...)
+						container.Env = append(container.Env, e)
+
 					}
 				}
 			}
-			// update the deployment if we've matched any configmaps
-			if update {
-				_, err := c.Deployments(ns).Update(&d)
-				if err != nil {
-					return errors.Wrap(err, "update deployment failed")
-				}
+
+			// update the deployment
+			_, err := c.Deployments(ns).Update(&d)
+			if err != nil {
+				return errors.Wrap(err, "update deployment failed")
 			}
+
 		}
 	}
 	return nil
