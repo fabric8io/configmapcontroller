@@ -1,0 +1,25 @@
+---
+apiVersion: "extensions/v1beta1"
+kind: "Deployment"
+metadata:
+  labels:
+    provider: "fabric8"
+    project: "configmapcontroller"
+  name: "configmapcontroller"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      project: "configmapcontroller"
+      provider: "fabric8"
+  template:
+    metadata:
+      labels:
+        provider: "fabric8"
+        project: "configmapcontroller"
+    spec:
+      containers:
+      - image: "fabric8/configmapcontroller:dev"
+        name: "configmapcontroller"
+        args:
+          - --v=8

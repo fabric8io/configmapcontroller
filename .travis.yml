@@ -1,0 +1,8 @@
+language: go
+go:
+- 1.7.1
+install:
+- echo "Don't run anything."
+script:
+- make test
+- make cross
