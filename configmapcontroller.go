@@ -10,13 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fabric8io/configmapcontroller/client"
+	"github.com/fabric8io/configmapcontroller/controller"
+	"github.com/fabric8io/configmapcontroller/util"
+	"github.com/fabric8io/configmapcontroller/version"
 	"github.com/golang/glog"
+	oclient "github.com/openshift/origin/pkg/client"
 	"github.com/spf13/pflag"
 	"k8s.io/kubernetes/pkg/api"
 	kubectlutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-
-	"github.com/fabric8io/configmapcontroller/controller"
-	"github.com/fabric8io/configmapcontroller/version"
 )
 
 const (
@@ -53,7 +55,19 @@ func main() {
 		glog.Fatalf("failed to create REST client config: %s", err)
 	}
 
-	c, err := controller.NewController(kubeClient, restClientConfig, factory.JSONEncoder(), *resyncPeriod, api.NamespaceAll)
+	var oc *oclient.Client
+	typeOfMaster, err := util.TypeOfMaster(kubeClient)
+	if err != nil {
+		glog.Fatalf("failed to create REST client config: %s", err)
+	}
+	if typeOfMaster == util.OpenShift {
+		oc, _, err = client.NewOpenShiftClient(restClientConfig)
+		if err != nil {
+			glog.Fatalf("failed to create REST client config: %s", err)
+		}
+	}
+
+	c, err := controller.NewController(kubeClient, oc, restClientConfig, factory.JSONEncoder(), *resyncPeriod, api.NamespaceAll)
 	if err != nil {
 		glog.Fatalf("%s", err)
 	}

@@ -4,9 +4,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fabric8io/configmapcontroller/util"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
+	oclient "github.com/openshift/origin/pkg/client"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/client/record"
@@ -33,6 +35,7 @@ type Controller struct {
 
 func NewController(
 	kubeClient *client.Client,
+	ocClient *oclient.Client,
 	restClientConfig *restclient.Config,
 	encoder runtime.Encoder,
 	resyncPeriod time.Duration, namespace string) (*Controller, error) {
@@ -60,7 +63,18 @@ func NewController(
 				oldM := oldObj.(*api.ConfigMap)
 				newCM := newObj.(*api.ConfigMap)
 				if oldM.ResourceVersion != newCM.ResourceVersion {
-					err := rollingUpgradeDeployments(newCM, kubeClient)
+
+					typeOfMaster, err := util.TypeOfMaster(kubeClient)
+					if err != nil {
+						glog.Fatalf("failed to create REST client config: %s", err)
+					}
+
+					if typeOfMaster == util.OpenShift {
+						err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
+					} else {
+						err = rollingUpgradeDeployments(newCM, kubeClient)
+					}
+
 					if err != nil {
 						glog.Errorf("failed to update deployment: %v", err)
 					}
@@ -107,35 +121,11 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 		return errors.Wrap(err, "failed to list deployments")
 	}
 	for _, d := range deployments.Items {
+		containers := d.Spec.Template.Spec.Containers
 		// match deployments with the correct annotation
-		value, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
-		if value != "" {
-			// we can have multiple configmaps to update
-			configmaps := strings.Split(value, ",")
-			for _, cmNameToUpdate := range configmaps {
-
-				configmapEnvar := "FABRIC8_" + strings.ToUpper(cmNameToUpdate) + "_CONFIGMAP"
-
-				containers := d.Spec.Template.Spec.Containers
-				for i := range containers {
-					envs := containers[i].Env
-					matched := false
-					for _, e := range envs {
-						if e.Name == configmapEnvar {
-							e.Value = configMapVersion
-							matched = true
-						}
-					}
-					// if no existing env var exists lets create one
-					if !matched {
-						e := api.EnvVar{
-							Name:  configmapEnvar,
-							Value: configMapVersion,
-						}
-						containers[i].Env = append(containers[i].Env, e)
-					}
-				}
-			}
+		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+		if annotationValue != "" {
+			updateContainers(containers, annotationValue, configMapVersion)
 
 			// update the deployment
 			_, err := c.Deployments(ns).Update(&d)
@@ -146,4 +136,60 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 		}
 	}
 	return nil
+}
+
+func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) error {
+	ns := cm.Namespace
+	configMapVersion := cm.ResourceVersion
+
+	deployments, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
+
+	if err != nil {
+		return errors.Wrap(err, "failed to list deployments")
+	}
+
+	for _, d := range deployments.Items {
+		containers := d.Spec.Template.Spec.Containers
+		// match deployments with the correct annotation
+		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+		if annotationValue != "" {
+			updateContainers(containers, annotationValue, configMapVersion)
+
+			// update the deployment
+			_, err := oc.DeploymentConfigs(ns).Update(&d)
+			if err != nil {
+				return errors.Wrap(err, "update deployment failed")
+			}
+
+		}
+	}
+	return nil
+}
+
+func updateContainers(containers []api.Container, annotationValue, configMapVersion string) {
+	// we can have multiple configmaps to update
+	configmaps := strings.Split(annotationValue, ",")
+	for _, cmNameToUpdate := range configmaps {
+
+		configmapEnvar := "FABRIC8_" + strings.ToUpper(cmNameToUpdate) + "_CONFIGMAP"
+
+		for i := range containers {
+			envs := containers[i].Env
+			matched := false
+			for _, e := range envs {
+				if e.Name == configmapEnvar {
+					e.Value = configMapVersion
+					matched = true
+				}
+			}
+			// if no existing env var exists lets create one
+			if !matched {
+				e := api.EnvVar{
+					Name:  configmapEnvar,
+					Value: configMapVersion,
+				}
+				containers[i].Env = append(containers[i].Env, e)
+			}
+		}
+	}
 }
