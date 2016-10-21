@@ -117,8 +117,8 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 				configmapEnvar := "FABRIC8_" + strings.ToUpper(cmNameToUpdate) + "_CONFIGMAP"
 
 				containers := d.Spec.Template.Spec.Containers
-				for _, container := range containers {
-					envs := container.Env
+				for i := range containers {
+					envs := containers[i].Env
 					matched := false
 					for _, e := range envs {
 						if e.Name == configmapEnvar {
@@ -132,9 +132,7 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 							Name:  configmapEnvar,
 							Value: configMapVersion,
 						}
-						//container.Env = append([]api.EnvVar{e}, container.Env...)
-						container.Env = append(container.Env, e)
-
+						containers[i].Env = append(containers[i].Env, e)
 					}
 				}
 			}
