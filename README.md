@@ -14,6 +14,10 @@ metadata:
     configmap.fabric8.io/update-on-change: "foo"
 ```
 
-Then, providing `configmapcontroller` is running, whenever you edit the `ConfigMap` called `foo` the configmapcontroller will update the `Deployment` (by setting an environment variable `FABRICB_FOO_REVISION=${configMapRevision}`.
+Then, providing `configmapcontroller` is running, whenever you edit the `ConfigMap` called `foo` the configmapcontroller will update the `Deployment` by adding the environment variable:
 
-This then triggers a rolling upgrade of your deployment to use the new configuration.
+```
+FABRICB_FOO_REVISION=${configMapRevision
+```
+
+This then triggers a rolling upgrade of your deployment's pods to use the new configuration.
