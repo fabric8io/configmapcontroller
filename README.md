@@ -17,7 +17,7 @@ metadata:
 Then, providing `configmapcontroller` is running, whenever you edit the `ConfigMap` called `foo` the configmapcontroller will update the `Deployment` by adding the environment variable:
 
 ```
-FABRICB_FOO_REVISION=${configMapRevision
+FABRICB_FOO_REVISION=${configMapRevision}
 ```
 
 This then triggers a rolling upgrade of your deployment's pods to use the new configuration.
