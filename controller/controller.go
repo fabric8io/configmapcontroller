@@ -10,6 +10,7 @@ import (
 
 	oclient "github.com/openshift/origin/pkg/client"
 	"k8s.io/kubernetes/pkg/api"
+
 	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/client/restclient"
@@ -62,13 +63,12 @@ func NewController(
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldM := oldObj.(*api.ConfigMap)
 				newCM := newObj.(*api.ConfigMap)
-				if oldM.ResourceVersion != newCM.ResourceVersion {
 
+				if oldM.ResourceVersion != newCM.ResourceVersion {
 					typeOfMaster, err := util.TypeOfMaster(kubeClient)
 					if err != nil {
 						glog.Fatalf("failed to create REST client config: %s", err)
 					}
-
 					if typeOfMaster == util.OpenShift {
 						err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
 					} else {
@@ -142,13 +142,12 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 	ns := cm.Namespace
 	configMapVersion := cm.ResourceVersion
 
-	deployments, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
-
+	dcs, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
 	if err != nil {
 		return errors.Wrap(err, "failed to list deployments")
 	}
 
-	for _, d := range deployments.Items {
+	for _, d := range dcs.Items {
 		containers := d.Spec.Template.Spec.Containers
 		// match deployments with the correct annotation
 		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
@@ -176,9 +175,9 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 		for i := range containers {
 			envs := containers[i].Env
 			matched := false
-			for _, e := range envs {
-				if e.Name == configmapEnvar {
-					e.Value = configMapVersion
+			for j := range envs {
+				if envs[j].Name == configmapEnvar {
+					envs[j].Value = configMapVersion
 					matched = true
 				}
 			}
