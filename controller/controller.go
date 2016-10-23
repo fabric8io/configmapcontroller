@@ -132,7 +132,7 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 			if err != nil {
 				return errors.Wrap(err, "update deployment failed")
 			}
-
+			glog.Infof("Updated Deployment %s", d.Name)
 		}
 	}
 	return nil
@@ -141,15 +141,15 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) error {
 	ns := cm.Namespace
 	configMapVersion := cm.ResourceVersion
-
 	dcs, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
 	if err != nil {
-		return errors.Wrap(err, "failed to list deployments")
+		return errors.Wrap(err, "failed to list deploymentsconfigs")
 	}
 
+	glog.Infof("found %v DC items in namespace %s", len(dcs.Items), ns)
 	for _, d := range dcs.Items {
 		containers := d.Spec.Template.Spec.Containers
-		// match deployments with the correct annotation
+		// match deployment configs with the correct annotation
 		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
 		if annotationValue != "" {
 			updateContainers(containers, annotationValue, configMapVersion)
@@ -159,7 +159,7 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 			if err != nil {
 				return errors.Wrap(err, "update deployment failed")
 			}
-
+			glog.Infof("Updated DeploymentConfigs %s", d.Name)
 		}
 	}
 	return nil
