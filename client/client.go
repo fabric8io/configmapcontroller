@@ -16,7 +16,6 @@
 package client
 
 import (
-	"github.com/fabric8io/gofabric8/util"
 	oclient "github.com/openshift/origin/pkg/client"
 	"github.com/pkg/errors"
 	"k8s.io/kubernetes/pkg/client/restclient"
@@ -28,8 +27,7 @@ func NewClient(f *cmdutil.Factory) (*client.Client, *restclient.Config, error) {
 	var err error
 	cfg, err := f.ClientConfig()
 	if err != nil {
-		util.Error("Could not initialise a client - is your server setting correct?\n\n")
-		util.Fatalf("%v", err)
+		return nil, nil, errors.Wrap(err, "Could not initialise client")
 	}
 	c, err := client.New(cfg)
 	if err != nil {
