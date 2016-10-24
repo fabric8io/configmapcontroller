@@ -8,7 +8,6 @@ import (
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
-	oclient "github.com/openshift/origin/pkg/client"
 	"k8s.io/kubernetes/pkg/api"
 
 	"k8s.io/kubernetes/pkg/client/cache"
@@ -18,6 +17,10 @@ import (
 	"k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
+
+	oclient "github.com/openshift/origin/pkg/client"
+	deployapi "github.com/openshift/origin/pkg/deploy/api"
+	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
 )
 
 const (
@@ -40,6 +43,10 @@ func NewController(
 	restClientConfig *restclient.Config,
 	encoder runtime.Encoder,
 	resyncPeriod time.Duration, namespace string) (*Controller, error) {
+
+	deployapi.AddToScheme(api.Scheme)
+	deployapiv1.AddToScheme(api.Scheme)
+
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartLogging(glog.Infof)
 	eventBroadcaster.StartRecordingToSink(kubeClient.Events(namespace))
