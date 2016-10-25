@@ -67,6 +67,24 @@ func NewController(
 		&api.ConfigMap{},
 		resyncPeriod,
 		framework.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				newCM := obj.(*api.ConfigMap)
+				typeOfMaster, err := util.TypeOfMaster(kubeClient)
+				if err != nil {
+					glog.Fatalf("failed to create REST client config: %s", err)
+				}
+				if typeOfMaster == util.OpenShift {
+					err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
+					if err != nil {
+						glog.Errorf("failed to update DeploymentConfig: %v", err)
+					}
+				}
+				err = rollingUpgradeDeployments(newCM, kubeClient)
+				if err != nil {
+					glog.Errorf("failed to update Deployment: %v", err)
+				}
+
+			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldM := oldObj.(*api.ConfigMap)
 				newCM := newObj.(*api.ConfigMap)
@@ -78,12 +96,13 @@ func NewController(
 					}
 					if typeOfMaster == util.OpenShift {
 						err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
-					} else {
-						err = rollingUpgradeDeployments(newCM, kubeClient)
+						if err != nil {
+							glog.Errorf("failed to update DeploymentConfig: %v", err)
+						}
 					}
-
+					err = rollingUpgradeDeployments(newCM, kubeClient)
 					if err != nil {
-						glog.Errorf("failed to update deployment: %v", err)
+						glog.Errorf("failed to update Deployment: %v", err)
 					}
 				}
 			},
@@ -147,6 +166,7 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 
 func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) error {
 	ns := cm.Namespace
+	configMapName := cm.Name
 	configMapVersion := cm.ResourceVersion
 	dcs, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
 	if err != nil {
@@ -159,21 +179,32 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 		// match deployment configs with the correct annotation
 		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
 		if annotationValue != "" {
-			updateContainers(containers, annotationValue, configMapVersion)
-
-			// update the deployment
-			_, err := oc.DeploymentConfigs(ns).Update(&d)
-			if err != nil {
-				return errors.Wrap(err, "update deployment failed")
+			values := strings.Split(annotationValue, ",")
+			matches := false
+			for _, value := range values {
+				if value == configMapName {
+					matches = true
+					break
+				}
 			}
-			glog.Infof("Updated DeploymentConfigs %s", d.Name)
+			if matches {
+				if (updateContainers(containers, annotationValue, configMapVersion)) {
+					// update the deployment
+					_, err := oc.DeploymentConfigs(ns).Update(&d)
+					if err != nil {
+						return errors.Wrap(err, "update deployment failed")
+					}
+					glog.Infof("Updated DeploymentConfigs %s", d.Name)
+				}
+			}
 		}
 	}
 	return nil
 }
 
-func updateContainers(containers []api.Container, annotationValue, configMapVersion string) {
+func updateContainers(containers []api.Container, annotationValue, configMapVersion string) bool {
 	// we can have multiple configmaps to update
+	answer := false
 	configmaps := strings.Split(annotationValue, ",")
 	for _, cmNameToUpdate := range configmaps {
 
@@ -184,8 +215,12 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 			matched := false
 			for j := range envs {
 				if envs[j].Name == configmapEnvar {
-					envs[j].Value = configMapVersion
 					matched = true
+					if envs[j].Value != configMapVersion {
+						glog.Infof("Updating %s from %s to %s", configmapEnvar, envs[j].Value, configMapVersion)
+						envs[j].Value = configMapVersion
+						answer = true
+					}
 				}
 			}
 			// if no existing env var exists lets create one
@@ -195,7 +230,9 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 					Value: configMapVersion,
 				}
 				containers[i].Env = append(containers[i].Env, e)
+				answer = true
 			}
 		}
 	}
+	return answer
 }
