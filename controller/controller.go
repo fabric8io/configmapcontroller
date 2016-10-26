@@ -231,7 +231,7 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 				if envs[j].Name == configmapEnvar {
 					matched = true
 					if envs[j].Value != configMapVersion {
-						glog.Infof("Updating %s from %s to %s", configmapEnvar, envs[j].Value, configMapVersion)
+						glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
 						envs[j].Value = configMapVersion
 						answer = true
 					}
