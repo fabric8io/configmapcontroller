@@ -141,7 +141,8 @@ func configMapWatchFunc(c *client.Client, ns string) func(options api.ListOption
 
 func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 	ns := cm.Namespace
-	configMapVersion := cm.ResourceVersion
+	configMapName := cm.Name
+	configMapVersion := convertConfigMapToToken(cm)
 
 	deployments, err := c.Deployments(ns).List(api.ListOptions{})
 	if err != nil {
@@ -152,14 +153,24 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 		// match deployments with the correct annotation
 		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
 		if annotationValue != "" {
-			updateContainers(containers, annotationValue, configMapVersion)
-
-			// update the deployment
-			_, err := c.Deployments(ns).Update(&d)
-			if err != nil {
-				return errors.Wrap(err, "update deployment failed")
+			values := strings.Split(annotationValue, ",")
+			matches := false
+			for _, value := range values {
+				if value == configMapName {
+					matches = true
+					break
+				}
 			}
-			glog.Infof("Updated Deployment %s", d.Name)
+			if matches {
+				updateContainers(containers, annotationValue, configMapVersion)
+
+				// update the deployment
+				_, err := c.Deployments(ns).Update(&d)
+				if err != nil {
+					return errors.Wrap(err, "update deployment failed")
+				}
+				glog.Infof("Updated Deployment %s", d.Name)
+			}
 		}
 	}
 	return nil
