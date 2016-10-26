@@ -21,6 +21,7 @@ import (
 	oclient "github.com/openshift/origin/pkg/client"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
+	"sort"
 )
 
 const (
@@ -167,13 +168,13 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) error {
 	ns := cm.Namespace
 	configMapName := cm.Name
-	configMapVersion := cm.ResourceVersion
+	configMapVersion := convertConfigMapToToken(cm)
 	dcs, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
 	if err != nil {
 		return errors.Wrap(err, "failed to list deploymentsconfigs")
 	}
 
-	glog.Infof("found %v DC items in namespace %s", len(dcs.Items), ns)
+	//glog.Infof("found %v DC items in namespace %s", len(dcs.Items), ns)
 	for _, d := range dcs.Items {
 		containers := d.Spec.Template.Spec.Containers
 		// match deployment configs with the correct annotation
@@ -200,6 +201,19 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 		}
 	}
 	return nil
+}
+
+// lets convert the configmap into a unique token based on the data values
+func convertConfigMapToToken(cm *api.ConfigMap) string {
+	values := []string{}
+	for k, v := range cm.Data {
+		values = append(values, k + "=" + v)
+	}
+	sort.Strings(values)
+	text := strings.Join(values, ";")
+	// we could zip and base64 encode
+	// but for now we could leave this easy to read so that its easier to diagnose when & why things changed
+	return text
 }
 
 func updateContainers(containers []api.Container, annotationValue, configMapVersion string) bool {
