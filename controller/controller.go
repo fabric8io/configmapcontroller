@@ -200,7 +200,7 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 				}
 			}
 			if matches {
-				if (updateContainers(containers, annotationValue, configMapVersion)) {
+				if updateContainers(containers, annotationValue, configMapVersion) {
 					// update the deployment
 					_, err := oc.DeploymentConfigs(ns).Update(&d)
 					if err != nil {
@@ -218,7 +218,7 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 func convertConfigMapToToken(cm *api.ConfigMap) string {
 	values := []string{}
 	for k, v := range cm.Data {
-		values = append(values, k + "=" + v)
+		values = append(values, k+"="+v)
 	}
 	sort.Strings(values)
 	text := strings.Join(values, ";")

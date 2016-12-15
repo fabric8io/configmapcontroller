@@ -12,86 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Use the native vendor/ dependency system
-export GO15VENDOREXPERIMENT=1
 
-VERSION ?= $(shell cat version/VERSION)
-REVISION=$(shell git rev-parse --short HEAD 2> /dev/null || echo 'unknown')
-BRANCH=$(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo 'unknown')
-HOST=$(shell hostname -f)
-BUILD_DATE=$(shell date +%Y%m%d-%H:%M:%S)
-GO_VERSION=$(shell go version | sed -e 's/^[^0-9.]*\([0-9.]*\).*/\1/')
+SHELL := /bin/bash
+NAME := configmapcontroller
+GO := GO15VENDOREXPERIMENT=1 go
+VERSION := $(shell cat version/VERSION)
+ROOT_PACKAGE := $(shell $(GO) list .)
+GO_VERSION := $(shell $(GO) version | sed -e 's/^[^0-9.]*\([0-9.]*\).*/\1/')
+PACKAGE_DIRS := $(shell $(GO) list ./... | grep -v /vendor/)
+FORMATTED := $(shell $(GO) fmt $(PACKAGE_DIRS))
 
-GOOS ?= $(shell go env GOOS)
-GOARCH ?= $(shell go env GOARCH)
-BUILD_DIR ?= ./out
-ORG := github.com/fabric8io
-REPOPATH ?= $(ORG)/configmapcontroller
-ROOT_PACKAGE := $(shell go list .)
-
-ORIGINAL_GOPATH := $(GOPATH)
-
+REV        := $(shell git rev-parse --short HEAD 2> /dev/null  || echo 'unknown')
+BRANCH     := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null  || echo 'unknown')
+BUILD_DATE := $(shell date +%Y%m%d-%H:%M:%S)
 BUILDFLAGS := -ldflags \
-  " -X $(ROOT_PACKAGE)/version.Version='$(VERSION)'\
-    -X $(ROOT_PACKAGE)/version.Revision='$(REVISION)'\
-    -X $(ROOT_PACKAGE)/version.Branch='$(BRANCH)'\
-    -X $(ROOT_PACKAGE)/version.BuildUser='${USER}@$(HOST)'\
-    -X $(ROOT_PACKAGE)/version.BuildDate='$(BUILD_DATE)'\
-    -X $(ROOT_PACKAGE)/version.GoVersion='$(GO_VERSION)'\
-    -s -w -extldflags '-static'"
+  " -X $(ROOT_PACKAGE)/version.Version=$(VERSION)\
+		-X $(ROOT_PACKAGE)/version.Revision='$(REV)'\
+		-X $(ROOT_PACKAGE)/version.Branch='$(BRANCH)'\
+		-X $(ROOT_PACKAGE)/version.BuildDate='$(BUILD_DATE)'\
+		-X $(ROOT_PACKAGE)/version.GoVersion='$(GO_VERSION)'"
 
-GOFILES := go list  -f '{{join .Deps "\n"}}' $(REPOPATH) | grep $(REPOPATH) | xargs go list -f '{{ range $$file := .GoFiles }} {{$$.Dir}}/{{$$file}}{{"\n"}}{{end}}'
-GOPACKAGES := $(shell go list ./... | grep -v /vendor/)
+build: *.go */*.go fmt
+	CGO_ENABLED=0 $(GO) build $(BUILDFLAGS) -o build/$(NAME) $(NAME).go
 
-.PHONY: install
-install: $(ORIGINAL_GOPATH)/bin/configmapcontroller
+test:
+	CGO_ENABLED=0 $(GO) test github.com/fabric8io/$(NAME)
 
-$(ORIGINAL_GOPATH)/bin/configmapcontroller: out/configmapcontroller-$(GOOS)-$(GOARCH)
-	cp $(BUILD_DIR)/configmapcontroller-$(GOOS)-$(GOARCH) $(ORIGINAL_GOPATH)/bin/configmapcontroller
+install: *.go */*.go
+	GOBIN=${GOPATH}/bin $(GO) install $(BUILDFLAGS) $(NAME).go
 
-out/configmapcontroller: out/configmapcontroller-$(GOOS)-$(GOARCH)
-	cp $(BUILD_DIR)/configmapcontroller-$(GOOS)-$(GOARCH) $(BUILD_DIR)/configmapcontroller
+fmt:
+	@([[ ! -z "$(FORMATTED)" ]] && printf "Fixed unformatted files:\n$(FORMATTED)") || true
 
-out/configmapcontroller-darwin-amd64: gopath $(shell $(GOFILES)) version/VERSION
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=darwin go build $(BUILDFLAGS) -o $(BUILD_DIR)/configmapcontroller-darwin-amd64 $(ROOT_PACKAGE)
+arm:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm $(GO) build $(BUILDFLAGS) -o build/$(NAME)-arm $(NAME).go
 
-out/configmapcontroller-linux-amd64: gopath $(shell $(GOFILES)) version/VERSION
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build $(BUILDFLAGS) -o $(BUILD_DIR)/configmapcontroller-linux-amd64 $(ROOT_PACKAGE)
+win:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(BUILDFLAGS) -o build/$(NAME).exe $(NAME).go
 
-out/configmapcontroller-windows-amd64.exe: gopath $(shell $(GOFILES)) version/VERSION
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=windows go build $(BUILDFLAGS) -o $(BUILD_DIR)/configmapcontroller-windows-amd64.exe $(ROOT_PACKAGE)
+bootstrap:
+	$(GO) get -u github.com/Masterminds/glide
+	GO15VENDOREXPERIMENT=1 glide update --strip-vendor --strip-vcs --update-vendored
 
-.PHONY: test
-test: gopath
-	go test -v $(GOPACKAGES)
-
-$(GOPATH)/bin/gh-release: gopath
-	go get github.com/progrium/gh-release
-
-.PHONY: release
-release: clean test $(GOPATH)/bin/gh-release cross
-	mkdir -p release
-	cp out/configmapcontroller-*-amd64* release
+release: test
+	rm -rf build release && mkdir build release
+	for os in linux darwin ; do \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=amd64 $(GO) build $(BUILDFLAGS) -o build/$(NAME)-$$os-amd64 $(NAME).go ; \
+	done
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(BUILDFLAGS) -o build/$(NAME)-windows-amd64.exe $(NAME).go
+	zip --junk-paths release/$(NAME)-windows-amd64.zip build/$(NAME)-windows-amd64.exe README.md LICENSE
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm $(GO) build $(BUILDFLAGS) -o build/$(NAME)-linux-arm $(NAME).go
+	cp build/$(NAME)-*-amd64* release
+	cp build/$(NAME)-*-arm* release
 	gh-release checksums sha256
-	gh-release create fabric8io/configmapcontroller $(VERSION) master v$(VERSION)
+	gh-release create fabric8io/$(NAME) $(VERSION) $(BRANCH) $(VERSION)
 
-.PHONY: cross
-cross: out/configmapcontroller-linux-amd64 out/configmapcontroller-darwin-amd64 out/configmapcontroller-windows-amd64.exe
-
-.PHONY: gopath
-gopath: $(GOPATH)/src/$(ORG)
-
-$(GOPATH)/src/$(ORG):
-	mkdir -p $(GOPATH)/src/$(ORG)
-	ln -s -f $(shell pwd) $(GOPATH)/src/$(ORG)
-
-
-.PHONY: clean
 clean:
-	rm -rf $(GOPATH)
-	rm -rf $(BUILD_DIR)
-	rm -rf release
+	rm -rf build release
 
-.PHONY: docker
-docker: out/configmapcontroller-linux-amd64
-	docker build -t "fabric8/configmapcontroller:dev" .
+.PHONY: release clean arm
