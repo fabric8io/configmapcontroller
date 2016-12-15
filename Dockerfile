@@ -2,4 +2,4 @@ FROM scratch
 
 ENTRYPOINT ["/configmapcontroller"]
 
-COPY ./out/configmapcontroller-linux-amd64 /configmapcontroller
+COPY ./build/configmapcontroller-linux-amd64 /configmapcontroller
