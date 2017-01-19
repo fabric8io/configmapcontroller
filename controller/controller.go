@@ -233,7 +233,7 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 	configmaps := strings.Split(annotationValue, ",")
 	for _, cmNameToUpdate := range configmaps {
 
-		configmapEnvar := "FABRIC8_" + strings.ToUpper(cmNameToUpdate) + "_CONFIGMAP"
+		configmapEnvar := "FABRIC8_" + strings.ToUpper(strings.Replace(cmNameToUpdate, "-", "_")) + "_CONFIGMAP"
 
 		for i := range containers {
 			envs := containers[i].Env
