@@ -5,4 +5,3 @@ install:
 - echo "Don't run anything."
 script:
 - make test
-- make cross

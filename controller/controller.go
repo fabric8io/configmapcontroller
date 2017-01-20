@@ -18,10 +18,11 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
 
+	"sort"
+
 	oclient "github.com/openshift/origin/pkg/client"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
-	"sort"
 )
 
 const (
@@ -233,7 +234,7 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 	configmaps := strings.Split(annotationValue, ",")
 	for _, cmNameToUpdate := range configmaps {
 
-		configmapEnvar := "FABRIC8_" + strings.ToUpper(strings.Replace(cmNameToUpdate, "-", "_")) + "_CONFIGMAP"
+		configmapEnvar := "FABRIC8_" + strings.ToUpper(strings.Replace(cmNameToUpdate, "-", "_", -1)) + "_CONFIGMAP"
 
 		for i := range containers {
 			envs := containers[i].Env
