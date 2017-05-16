@@ -271,7 +271,7 @@ func convertToEnvVarName(text string) string {
 	lastCharValid := false
 	for i := 0; i < len(lower); i++ {
 		ch := lower[i]
-		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
 			buffer.WriteString(string(ch))
 			lastCharValid = true
 		} else {
