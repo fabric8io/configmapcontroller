@@ -267,7 +267,7 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 // removing any special chars with '_'
 func convertToEnvVarName(text string) string {
 	var buffer bytes.Buffer
-	lower := strings.ToUpper(text)
+	lower := strings.ToLower(text)
 	lastCharValid := false
 	for i := 0; i < len(lower); i++ {
 		ch := lower[i]
