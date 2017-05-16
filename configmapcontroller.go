@@ -67,7 +67,15 @@ func main() {
 		}
 	}
 
-	c, err := controller.NewController(kubeClient, oc, restClientConfig, factory.JSONEncoder(), *resyncPeriod, api.NamespaceAll)
+	watchNamespaces := api.NamespaceAll
+	currentNamespace := os.Getenv("KUBERNETES_NAMESPACE")
+	if len(currentNamespace) > 0 {
+		watchNamespaces = currentNamespace
+	}
+	glog.Infof("Watching services in namespaces: `%s`", watchNamespaces)
+
+
+	c, err := controller.NewController(kubeClient, oc, restClientConfig, factory.JSONEncoder(), *resyncPeriod, watchNamespaces)
 	if err != nil {
 		glog.Fatalf("%s", err)
 	}
