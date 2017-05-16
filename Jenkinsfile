@@ -20,7 +20,8 @@ def updateDownstreamDependencies(v) {
   pushPomPropertyChangePR {
     propertyName = 'configmapcontroller.version'
     projects = [
-            'fabric8io/fabric8-devops'
+            'fabric8io/fabric8-devops',
+            'fabric8io/fabric8-platform'
     ]
     version = v
   }
