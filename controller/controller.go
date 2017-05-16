@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"strings"
 	"time"
 
@@ -233,8 +234,7 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 	answer := false
 	configmaps := strings.Split(annotationValue, ",")
 	for _, cmNameToUpdate := range configmaps {
-
-		configmapEnvar := "FABRIC8_" + strings.ToUpper(strings.Replace(cmNameToUpdate, "-", "_", -1)) + "_CONFIGMAP"
+		configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
 
 		for i := range containers {
 			envs := containers[i].Env
@@ -261,4 +261,25 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 		}
 	}
 	return answer
+}
+
+// convertToEnvVarName converts the given text into a usable env var
+// removing any special chars with '_'
+func convertToEnvVarName(text string) string {
+	var buffer bytes.Buffer
+	lower := strings.ToUpper(text)
+	lastCharValid := false
+	for i := 0; i < len(lower); i++ {
+		ch := lower[i]
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			buffer.WriteString(string(ch))
+			lastCharValid = true
+		} else {
+			if lastCharValid {
+				buffer.WriteString("_")
+			}
+			lastCharValid = false
+		}
+	}
+	return buffer.String()
 }
