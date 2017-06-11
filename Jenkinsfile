@@ -21,7 +21,7 @@ def updateDownstreamDependencies(v) {
     propertyName = 'configmapcontroller.version'
     projects = [
             'fabric8io/fabric8-devops',
-            'fabric8io/fabric8-platform'
+            'fabric8io/fabric8-platform',
             'funktionio/funktion-platform'
     ]
     version = v
