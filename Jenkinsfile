@@ -22,6 +22,7 @@ def updateDownstreamDependencies(v) {
     projects = [
             'fabric8io/fabric8-devops',
             'fabric8io/fabric8-platform'
+            'funktionio/funktion-platform'
     ]
     version = v
   }
