@@ -19,6 +19,8 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
 
+	"crypto/sha256"
+	"encoding/base64"
 	"sort"
 
 	oclient "github.com/openshift/origin/pkg/client"
@@ -224,9 +226,10 @@ func convertConfigMapToToken(cm *api.ConfigMap) string {
 	}
 	sort.Strings(values)
 	text := strings.Join(values, ";")
-	// we could zip and base64 encode
-	// but for now we could leave this easy to read so that its easier to diagnose when & why things changed
-	return text
+	hasher := sha256.New()
+	hasher.Write([]byte(text))
+	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
+	return sha
 }
 
 func updateContainers(containers []api.Container, annotationValue, configMapVersion string) bool {
