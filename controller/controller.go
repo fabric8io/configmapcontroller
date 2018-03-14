@@ -232,29 +232,29 @@ func convertConfigMapToToken(cm *api.ConfigMap) string {
 func updateContainers(containers []api.Container, configMapVersion string, cmNameToUpdate string) bool {
 	// we can have multiple configmaps to update
 	answer := false
-  configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
-  for i := range containers {
-    envs := containers[i].Env
-    matched := false
-    for j := range envs {
-      if envs[j].Name == configmapEnvar {
-        matched = true
-        if envs[j].Value != configMapVersion {
-          glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
-          envs[j].Value = configMapVersion
-          answer = true
-        }
-      }
-    }
-    // if no existing env var exists lets create one
-    if !matched {
-      e := api.EnvVar{
-        Name:  configmapEnvar,
-        Value: configMapVersion,
-      }
-      containers[i].Env = append(containers[i].Env, e)
-      answer = true
-    }
+	configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
+	for i := range containers {
+		envs := containers[i].Env
+		matched := false
+		for j := range envs {
+			if envs[j].Name == configmapEnvar {
+				matched = true
+				if envs[j].Value != configMapVersion {
+					glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
+					envs[j].Value = configMapVersion
+					answer = true
+				}
+			}
+		}
+		// if no existing env var exists lets create one
+		if !matched {
+			e := api.EnvVar{
+				Name:  configmapEnvar,
+				Value: configMapVersion,
+			}
+			containers[i].Env = append(containers[i].Env, e)
+			answer = true
+		}
 	}
 	return answer
 }
