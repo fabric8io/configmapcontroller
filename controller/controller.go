@@ -164,7 +164,7 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 				}
 			}
 			if matches {
-				updateContainers(containers, annotationValue, configMapVersion)
+				updateContainers(containers, configMapVersion, configMapName)
 
 				// update the deployment
 				_, err := c.Deployments(ns).Update(&d)
@@ -202,7 +202,7 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 				}
 			}
 			if matches {
-				if updateContainers(containers, annotationValue, configMapVersion) {
+				if updateContainers(containers, configMapVersion, configMapName) {
 					// update the deployment
 					_, err := oc.DeploymentConfigs(ns).Update(&d)
 					if err != nil {
@@ -229,36 +229,32 @@ func convertConfigMapToToken(cm *api.ConfigMap) string {
 	return text
 }
 
-func updateContainers(containers []api.Container, annotationValue, configMapVersion string) bool {
+func updateContainers(containers []api.Container, configMapVersion string, cmNameToUpdate string) bool {
 	// we can have multiple configmaps to update
 	answer := false
-	configmaps := strings.Split(annotationValue, ",")
-	for _, cmNameToUpdate := range configmaps {
-		configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
-
-		for i := range containers {
-			envs := containers[i].Env
-			matched := false
-			for j := range envs {
-				if envs[j].Name == configmapEnvar {
-					matched = true
-					if envs[j].Value != configMapVersion {
-						glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
-						envs[j].Value = configMapVersion
-						answer = true
-					}
-				}
-			}
-			// if no existing env var exists lets create one
-			if !matched {
-				e := api.EnvVar{
-					Name:  configmapEnvar,
-					Value: configMapVersion,
-				}
-				containers[i].Env = append(containers[i].Env, e)
-				answer = true
-			}
-		}
+  configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
+  for i := range containers {
+    envs := containers[i].Env
+    matched := false
+    for j := range envs {
+      if envs[j].Name == configmapEnvar {
+        matched = true
+        if envs[j].Value != configMapVersion {
+          glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
+          envs[j].Value = configMapVersion
+          answer = true
+        }
+      }
+    }
+    // if no existing env var exists lets create one
+    if !matched {
+      e := api.EnvVar{
+        Name:  configmapEnvar,
+        Value: configMapVersion,
+      }
+      containers[i].Env = append(containers[i].Env, e)
+      answer = true
+    }
 	}
 	return answer
 }
