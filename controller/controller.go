@@ -26,9 +26,9 @@ import (
 	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
 
 	"fmt"
-	"os/exec"
+	"gopkg.in/v2/yaml"
 	"io"
-	"gopkg.in/yaml.v2"
+	"os/exec"
 )
 
 const (
