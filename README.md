@@ -14,7 +14,7 @@ metadata:
     configmap.fabric8.io/update-on-change: "foo"
 ```
 
-Then, providing `configmapcontroller` is running, whenever you edit the `ConfigMap` called `foo` the configmapcontroller will update the `Deployment`, `StatefulSet` or `DaemonSet` by labeling it and hence triggering a rolling update on the object.
+Then, providing `configmapcontroller` is running, whenever you edit the `ConfigMap` called `foo` the configmapcontroller will update the `Deployment`, `StatefulSet` or `DaemonSet` by labeling it and hence triggering a rolling update on the object provided that .spec.updateStrategy.type is set to `RollingUpdate`. 
 
 The label would be
 
