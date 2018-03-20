@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fabric8io/configmapcontroller/util"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
