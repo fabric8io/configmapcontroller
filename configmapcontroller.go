@@ -10,12 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fabric8io/configmapcontroller/client"
 	"github.com/fabric8io/configmapcontroller/controller"
-	"github.com/fabric8io/configmapcontroller/util"
 	"github.com/fabric8io/configmapcontroller/version"
 	"github.com/golang/glog"
-	oclient "github.com/openshift/origin/pkg/client"
 	"github.com/spf13/pflag"
 	"k8s.io/kubernetes/pkg/api"
 	kubectlutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
@@ -55,18 +52,6 @@ func main() {
 		glog.Fatalf("failed to create REST client config: %s", err)
 	}
 
-	var oc *oclient.Client
-	typeOfMaster, err := util.TypeOfMaster(kubeClient)
-	if err != nil {
-		glog.Fatalf("failed to create REST client config: %s", err)
-	}
-	if typeOfMaster == util.OpenShift {
-		oc, _, err = client.NewOpenShiftClient(restClientConfig)
-		if err != nil {
-			glog.Fatalf("failed to create REST client config: %s", err)
-		}
-	}
-
 	watchNamespaces := api.NamespaceAll
 	currentNamespace := os.Getenv("KUBERNETES_NAMESPACE")
 	if len(currentNamespace) > 0 {
@@ -74,8 +59,7 @@ func main() {
 	}
 	glog.Infof("Watching services in namespaces: `%s`", watchNamespaces)
 
-
-	c, err := controller.NewController(kubeClient, oc, restClientConfig, factory.JSONEncoder(), *resyncPeriod, watchNamespaces)
+	c, err := controller.NewController(kubeClient, restClientConfig, factory.JSONEncoder(), *resyncPeriod, watchNamespaces)
 	if err != nil {
 		glog.Fatalf("%s", err)
 	}
