@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"configmapcontroller/controller"
-	"configmapcontroller/version"
+	"github.com/fabric8io/configmapcontroller/controller"
+	"github.com/fabric8io/configmapcontroller/version"
 	"github.com/golang/glog"
 	"github.com/spf13/pflag"
 	"k8s.io/kubernetes/pkg/api"
