@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/pkg/errors"
 
 	"k8s.io/kubernetes/pkg/api"
 
@@ -18,9 +17,6 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
 
-	"sort"
-
-	oclient "github.com/openshift/origin/pkg/client"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
 
@@ -31,7 +27,7 @@ import (
 )
 
 const (
-	updateOnChangeAnnotation = "configmap.fabric8.io/update-on-change"
+	updateOnChangeAnnotationSuffix = ".fabric8.io/update-on-change"
 )
 
 type AnnotationsField map[string]string
@@ -49,16 +45,17 @@ type ObjectList struct {
 type Controller struct {
 	client *client.Client
 
-	cmController *framework.Controller
-	cmLister     cache.StoreToServiceLister
-	recorder     record.EventRecorder
+	cmController     *framework.Controller
+	cmLister         cache.StoreToServiceLister
+	secretController *framework.Controller
+	secretLister     cache.StoreToServiceLister
+	recorder         record.EventRecorder
 
 	stopCh chan struct{}
 }
 
 func NewController(
 	kubeClient *client.Client,
-	ocClient *oclient.Client,
 	restClientConfig *restclient.Config,
 	encoder runtime.Encoder,
 	resyncPeriod time.Duration, namespace string) (*Controller, error) {
@@ -104,15 +101,41 @@ func NewController(
 			},
 		},
 	)
+	c.secretLister.Store, c.secretController = framework.NewInformer(
+		&cache.ListWatch{
+			ListFunc:  secretListFunc(c.client, namespace),
+			WatchFunc: secretWatchFunc(c.client, namespace),
+		},
+		&api.Secret{},
+		resyncPeriod,
+		framework.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				s := obj.(*api.Secret)
+				go rollingUpgradeObject(s, "Deployment")
+				go rollingUpgradeObject(s, "DaemonSet")
+				go rollingUpgradeObject(s, "StatefulSet")
+			},
+			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
+				oldSec := oldObj.(*api.Secret)
+				newSec := newObj.(*api.Secret)
+
+				if oldSec.ResourceVersion != newSec.ResourceVersion {
+					go rollingUpgradeObject(newSec, "Deployment")
+					go rollingUpgradeObject(newSec, "DaemonSet")
+					go rollingUpgradeObject(newSec, "StatefulSet")
+				}
+			},
+		},
+	)
 	return &c, nil
 }
 
 // Run starts the controller.
 func (c *Controller) Run() {
-	glog.Infof("starting configmapcontroller")
-
+	glog.Infof("Starting configmapcontroller. Watching configmaps")
 	go c.cmController.Run(c.stopCh)
-
+	glog.Infof("Starting configmapcontroller. Watching secrets")
+	go c.secretController.Run(c.stopCh)
 	<-c.stopCh
 }
 
@@ -131,6 +154,20 @@ func configMapListFunc(c *client.Client, ns string) func(api.ListOptions) (runti
 func configMapWatchFunc(c *client.Client, ns string) func(options api.ListOptions) (watch.Interface, error) {
 	return func(options api.ListOptions) (watch.Interface, error) {
 		return c.ConfigMaps(ns).Watch(options)
+	}
+}
+
+func secretListFunc(c *client.Client, ns string) func(api.ListOptions) (runtime.Object, error) {
+	glog.Infof("Listing secrets")
+	return func(opts api.ListOptions) (runtime.Object, error) {
+		return c.Secrets(ns).List(opts)
+	}
+}
+
+func secretWatchFunc(c *client.Client, ns string) func(options api.ListOptions) (watch.Interface, error) {
+	glog.Infof("Watching secrets")
+	return func(options api.ListOptions) (watch.Interface, error) {
+		return c.Secrets(ns).Watch(options)
 	}
 }
 
@@ -155,36 +192,47 @@ func findObjectsByKind(objectKind string) ObjectList {
 	return g
 }
 
-func rollingUpgradeObject(cm *api.ConfigMap, objectKind string) error {
+func rollingUpgradeObject(objectThatChanged interface{}, objectKind string) {
+	glog.Infof("Rolling upgrade object %s", objectKind)
+	nameOfObjectThatChanged, typeOfObjectThatChanged, versionOfObjectThatChanged := getObjectVars(objectThatChanged)
+	glog.Infof("Object that changed: %s %s %s", nameOfObjectThatChanged, typeOfObjectThatChanged, versionOfObjectThatChanged)
+	if typeOfObjectThatChanged == "" {
+		glog.Infof("Type of object that changed is not handled. Type: [%s]", typeOfObjectThatChanged)
+		return
+	}
+	updateOnChangeAnnotation := strings.ToLower(typeOfObjectThatChanged) + updateOnChangeAnnotationSuffix
+	labelName := "FABRIC8_" + convertToEnvVarName(nameOfObjectThatChanged) + "_" + strings.ToUpper(typeOfObjectThatChanged)
+	glog.Infof("Label: %s", labelName)
+	glog.Infof("Annotation: %s", updateOnChangeAnnotation)
 	objects := findObjectsByKind(objectKind)
-	configMapName := cm.Name
-	configMapLabel := "FABRIC8_" + convertToEnvVarName(configMapName) + "_CONFIGMAP"
-
 	for _, o := range objects.Items {
 		annotationValue := o.Metadata.Annotations[updateOnChangeAnnotation]
+		glog.Infof("Object: %s, Annotation value: %s", o.Metadata.Name, annotationValue)
 		if annotationValue != "" {
 			values := strings.Split(annotationValue, ",")
 			for _, value := range values {
-				if value == configMapName {
-					go RunKubectlPatch(objectKind, o.Metadata.Name, configMapLabel, cm.ObjectMeta.ResourceVersion)
+				if value == nameOfObjectThatChanged {
+					go RunKubectlPatch(objectKind, o.Metadata.Name, labelName, versionOfObjectThatChanged)
 				}
 			}
 		}
 	}
-	return nil
 }
 
-// lets convert the configmap into a unique token based on the data values
-func convertConfigMapToToken(cm *api.ConfigMap) string {
-	values := []string{}
-	for k, v := range cm.Data {
-		values = append(values, k+"="+v)
+func getObjectVars(o interface{}) (string, string, string) {
+	glog.Infof("obtaining object variables")
+	cm, ok := o.(*api.ConfigMap)
+	if ok {
+		glog.Infof("returning variables for configmap")
+		return cm.Name, "CONFIGMAP", cm.ObjectMeta.ResourceVersion
 	}
-	sort.Strings(values)
-	text := strings.Join(values, ";")
-	// we could zip and base64 encode
-	// but for now we could leave this easy to read so that its easier to diagnose when & why things changed
-	return text
+	sec, ok := o.(*api.Secret)
+	if ok {
+		glog.Infof("returning variables for secret")
+		return sec.Name, "SECRET", sec.ObjectMeta.ResourceVersion
+	}
+	glog.Errorf("The reported object that changed is not a Secret or a ConfigMap")
+	return "", "", ""
 }
 
 // convertToEnvVarName converts the given text into a usable env var
@@ -211,17 +259,10 @@ func convertToEnvVarName(text string) string {
 func RunKubectlPatch(objectKind string, objectId string, labelName string, labelValue string) {
 	yamlPatch := fmt.Sprintf("spec:\n  template:\n    metadata:\n      labels:\n        %s: '%s'", labelName, labelValue)
 	glog.Infof("About to run patch: %s %s with %s", objectKind, objectId, yamlPatch)
-	attemptDelay := 30
-	for attempt := 1; attempt < 3; attempt++ {
-		err := exec.Command("/kubectl", "patch", objectKind, objectId, "--patch", yamlPatch).Run()
-		if err == nil {
-			glog.Infof("Successfully sent patch request for %s %s", objectKind, objectId)
-			return
-		}
-		glog.Errorf("error running kubectl attempt %d. Waiting %d seconds", attempt, attemptDelay)
-		fmt.Printf("%s", errors.Wrap(err, "error patching element"))
-		time.Sleep(time.Duration(attemptDelay) * time.Second)
-		attemptDelay = attemptDelay * 2
+	err := exec.Command("/kubectl", "patch", objectKind, objectId, "--patch", yamlPatch).Run()
+	if err == nil {
+		glog.Infof("Successfully sent patch request for %s %s", objectKind, objectId)
+		return
 	}
 	glog.Errorf("Could not execute patch %s on object %s of kind %s", yamlPatch, objectId, objectKind)
 }
