@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fabric8io/configmapcontroller/util"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
@@ -26,12 +25,29 @@ import (
 	oclient "github.com/openshift/origin/pkg/client"
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	deployapiv1 "github.com/openshift/origin/pkg/deploy/api/v1"
+
+	"fmt"
+	"gopkg.in/v2/yaml"
+	"io"
+	"os/exec"
 )
 
 const (
 	updateOnChangeAnnotation = "configmap.fabric8.io/update-on-change"
 )
 
+type AnnotationsField map[string]string
+type MetadataField struct {
+	Name        string
+	Annotations AnnotationsField
+}
+type GenericAnnotatedObject struct {
+	Kind     string
+	Metadata MetadataField
+}
+type ObjectList struct {
+	Items []GenericAnnotatedObject
+}
 type Controller struct {
 	client *client.Client
 
@@ -73,42 +89,19 @@ func NewController(
 		resyncPeriod,
 		framework.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				newCM := obj.(*api.ConfigMap)
-				typeOfMaster, err := util.TypeOfMaster(kubeClient)
-				if err != nil {
-					glog.Fatalf("failed to create REST client config: %s", err)
-				}
-				if typeOfMaster == util.OpenShift {
-					err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
-					if err != nil {
-						glog.Errorf("failed to update DeploymentConfig: %v", err)
-					}
-				}
-				err = rollingUpgradeDeployments(newCM, kubeClient)
-				if err != nil {
-					glog.Errorf("failed to update Deployment: %v", err)
-				}
-
+				cm := obj.(*api.ConfigMap)
+				go rollingUpgradeObject(cm, "Deployment")
+				go rollingUpgradeObject(cm, "DaemonSet")
+				go rollingUpgradeObject(cm, "StatefulSet")
 			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldM := oldObj.(*api.ConfigMap)
 				newCM := newObj.(*api.ConfigMap)
 
 				if oldM.ResourceVersion != newCM.ResourceVersion {
-					typeOfMaster, err := util.TypeOfMaster(kubeClient)
-					if err != nil {
-						glog.Fatalf("failed to create REST client config: %s", err)
-					}
-					if typeOfMaster == util.OpenShift {
-						err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
-						if err != nil {
-							glog.Errorf("failed to update DeploymentConfig: %v", err)
-						}
-					}
-					err = rollingUpgradeDeployments(newCM, kubeClient)
-					if err != nil {
-						glog.Errorf("failed to update Deployment: %v", err)
-					}
+					go rollingUpgradeObject(newCM, "Deployment")
+					go rollingUpgradeObject(newCM, "DaemonSet")
+					go rollingUpgradeObject(newCM, "StatefulSet")
 				}
 			},
 		},
@@ -143,74 +136,39 @@ func configMapWatchFunc(c *client.Client, ns string) func(options api.ListOption
 	}
 }
 
-func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
-	ns := cm.Namespace
-	configMapName := cm.Name
-	configMapVersion := convertConfigMapToToken(cm)
-
-	deployments, err := c.Deployments(ns).List(api.ListOptions{})
+func findObjectsByKind(objectKind string) ObjectList {
+	kubectlbinary := "/kubectl"
+	cmd := exec.Command(kubectlbinary, "get", objectKind, "-o", "yaml")
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return errors.Wrap(err, "failed to list deployments")
+		glog.Errorf("Error retrieving objects by kind. Could not start pipe.")
+		var emptyObjectList ObjectList
+		return emptyObjectList
 	}
-	for _, d := range deployments.Items {
-		containers := d.Spec.Template.Spec.Containers
-		// match deployments with the correct annotation
-		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
-		if annotationValue != "" {
-			values := strings.Split(annotationValue, ",")
-			matches := false
-			for _, value := range values {
-				if value == configMapName {
-					matches = true
-					break
-				}
-			}
-			if matches {
-				updateContainers(containers, annotationValue, configMapVersion)
-
-				// update the deployment
-				_, err := c.Deployments(ns).Update(&d)
-				if err != nil {
-					return errors.Wrap(err, "update deployment failed")
-				}
-				glog.Infof("Updated Deployment %s", d.Name)
-			}
-		}
+	if err := cmd.Start(); err != nil {
+		glog.Errorf("Error retrieving objects by kind. Could not query.")
+		var emptyObjectList ObjectList
+		return emptyObjectList
 	}
-	return nil
+	buf := bytes.NewBuffer(nil)
+	io.Copy(buf, stdout)
+	var g ObjectList
+	yaml.Unmarshal(buf.Bytes(), &g)
+	return g
 }
 
-func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) error {
-	ns := cm.Namespace
+func rollingUpgradeObject(cm *api.ConfigMap, objectKind string) error {
+	objects := findObjectsByKind(objectKind)
 	configMapName := cm.Name
-	configMapVersion := convertConfigMapToToken(cm)
-	dcs, err := oc.DeploymentConfigs(ns).List(api.ListOptions{})
-	if err != nil {
-		return errors.Wrap(err, "failed to list deploymentsconfigs")
-	}
+	configMapLabel := "FABRIC8_" + convertToEnvVarName(configMapName) + "_CONFIGMAP"
 
-	//glog.Infof("found %v DC items in namespace %s", len(dcs.Items), ns)
-	for _, d := range dcs.Items {
-		containers := d.Spec.Template.Spec.Containers
-		// match deployment configs with the correct annotation
-		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+	for _, o := range objects.Items {
+		annotationValue := o.Metadata.Annotations[updateOnChangeAnnotation]
 		if annotationValue != "" {
 			values := strings.Split(annotationValue, ",")
-			matches := false
 			for _, value := range values {
 				if value == configMapName {
-					matches = true
-					break
-				}
-			}
-			if matches {
-				if updateContainers(containers, annotationValue, configMapVersion) {
-					// update the deployment
-					_, err := oc.DeploymentConfigs(ns).Update(&d)
-					if err != nil {
-						return errors.Wrap(err, "update deployment failed")
-					}
-					glog.Infof("Updated DeploymentConfigs %s", d.Name)
+					go RunKubectlPatch(objectKind, o.Metadata.Name, configMapLabel, cm.ObjectMeta.ResourceVersion)
 				}
 			}
 		}
@@ -232,40 +190,6 @@ func convertConfigMapToToken(cm *api.ConfigMap) string {
 	return sha
 }
 
-func updateContainers(containers []api.Container, annotationValue, configMapVersion string) bool {
-	// we can have multiple configmaps to update
-	answer := false
-	configmaps := strings.Split(annotationValue, ",")
-	for _, cmNameToUpdate := range configmaps {
-		configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
-
-		for i := range containers {
-			envs := containers[i].Env
-			matched := false
-			for j := range envs {
-				if envs[j].Name == configmapEnvar {
-					matched = true
-					if envs[j].Value != configMapVersion {
-						glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
-						envs[j].Value = configMapVersion
-						answer = true
-					}
-				}
-			}
-			// if no existing env var exists lets create one
-			if !matched {
-				e := api.EnvVar{
-					Name:  configmapEnvar,
-					Value: configMapVersion,
-				}
-				containers[i].Env = append(containers[i].Env, e)
-				answer = true
-			}
-		}
-	}
-	return answer
-}
-
 // convertToEnvVarName converts the given text into a usable env var
 // removing any special chars with '_'
 func convertToEnvVarName(text string) string {
@@ -285,4 +209,22 @@ func convertToEnvVarName(text string) string {
 		}
 	}
 	return buffer.String()
+}
+
+func RunKubectlPatch(objectKind string, objectId string, labelName string, labelValue string) {
+	yamlPatch := fmt.Sprintf("spec:\n  template:\n    metadata:\n      labels:\n        %s: '%s'", labelName, labelValue)
+	glog.Infof("About to run patch: %s %s with %s", objectKind, objectId, yamlPatch)
+	attemptDelay := 30
+	for attempt := 1; attempt < 3; attempt++ {
+		err := exec.Command("/kubectl", "patch", objectKind, objectId, "--patch", yamlPatch).Run()
+		if err == nil {
+			glog.Infof("Successfully sent patch request for %s %s", objectKind, objectId)
+			return
+		}
+		glog.Errorf("error running kubectl attempt %d. Waiting %d seconds", attempt, attemptDelay)
+		fmt.Printf("%s", errors.Wrap(err, "error patching element"))
+		time.Sleep(time.Duration(attemptDelay) * time.Second)
+		attemptDelay = attemptDelay * 2
+	}
+	glog.Errorf("Could not execute patch %s on object %s of kind %s", yamlPatch, objectId, objectKind)
 }

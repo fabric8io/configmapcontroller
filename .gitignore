@@ -1,5 +1,4 @@
 *.swp
-bin/
 _dist/
 .idea
 golib
