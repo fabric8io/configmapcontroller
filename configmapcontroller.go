@@ -28,22 +28,23 @@ const (
 var (
 	flags = pflag.NewFlagSet("", pflag.ExitOnError)
 
-	resyncPeriod = flags.Duration("sync-period", 30*time.Second,
-		`Relist and confirm services this often.`)
-
-	healthzPort = flags.Int("healthz-port", healthPort, "port for healthz endpoint.")
-
-	profiling = flags.Bool("profiling", true, `Enable profiling via web interface host:port/debug/pprof/`)
+	resyncPeriod = flags.Duration("sync-period", 30*time.Second, "Relist and confirm services this often.")
+	healthzPort  = flags.Int("healthz-port", healthPort, "port for healthz endpoint.")
+	profiling    = flags.Bool("profiling", true, "Enable profiling via web interface host:port/debug/pprof/")
 )
 
 func main() {
 	factory := kubectlutil.NewFactory(nil)
 	factory.BindFlags(flags)
 	factory.BindExternalFlags(flags)
-	flags.Parse(os.Args)
-	flag.CommandLine.Parse([]string{})
+	if err := flags.Parse(os.Args); err != nil {
+		glog.Fatalf("failed to parse flags for pflag: %v", err)
+	}
+	if err := flag.CommandLine.Parse(nil); err != nil {
+		glog.Fatalf("failed to parse flags for flag", err)
+	}
 
-	glog.Infof("Using build: %v", version.Version)
+	glog.Infof("Using build: %s", version.Version)
 
 	kubeClient, err := factory.Client()
 	if err != nil {
@@ -52,32 +53,31 @@ func main() {
 
 	restClientConfig, err := factory.ClientConfig()
 	if err != nil {
-		glog.Fatalf("failed to create REST client config: %s", err)
+		glog.Fatalf("failed to create REST client config: %v", err)
 	}
 
 	var oc *oclient.Client
 	typeOfMaster, err := util.TypeOfMaster(kubeClient)
 	if err != nil {
-		glog.Fatalf("failed to create REST client config: %s", err)
+		glog.Fatalf("failed to create REST client config: %v", err)
 	}
 	if typeOfMaster == util.OpenShift {
 		oc, _, err = client.NewOpenShiftClient(restClientConfig)
 		if err != nil {
-			glog.Fatalf("failed to create REST client config: %s", err)
+			glog.Fatalf("failed to create REST client config: %v", err)
 		}
 	}
 
 	watchNamespaces := api.NamespaceAll
 	currentNamespace := os.Getenv("KUBERNETES_NAMESPACE")
-	if len(currentNamespace) > 0 {
+	if currentNamespace != "" {
 		watchNamespaces = currentNamespace
 	}
 	glog.Infof("Watching services in namespaces: `%s`", watchNamespaces)
 
-
 	c, err := controller.NewController(kubeClient, oc, restClientConfig, factory.JSONEncoder(), *resyncPeriod, watchNamespaces)
 	if err != nil {
-		glog.Fatalf("%s", err)
+		glog.Fatalf("failed to create controller: %v", err)
 	}
 
 	go registerHandlers()
@@ -96,7 +96,7 @@ func registerHandlers() {
 	}
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%v", *healthzPort),
+		Addr:    fmt.Sprintf(":%d", *healthzPort),
 		Handler: mux,
 	}
 	glog.Fatal(server.ListenAndServe())

@@ -30,6 +30,7 @@ import (
 
 const (
 	updateOnChangeAnnotation = "configmap.fabric8.io/update-on-change"
+	separator                = ","
 )
 
 type Controller struct {
@@ -43,8 +44,7 @@ type Controller struct {
 }
 
 func NewController(
-	kubeClient *client.Client,
-	ocClient *oclient.Client,
+	kubeClient *client.Client, ocClient *oclient.Client,
 	restClientConfig *restclient.Config,
 	encoder runtime.Encoder,
 	resyncPeriod time.Duration, namespace string) (*Controller, error) {
@@ -76,35 +76,39 @@ func NewController(
 				newCM := obj.(*api.ConfigMap)
 				typeOfMaster, err := util.TypeOfMaster(kubeClient)
 				if err != nil {
-					glog.Fatalf("failed to create REST client config: %s", err)
+					glog.Fatalf("failed to create REST client config: %v", err)
 				}
-				if typeOfMaster == util.OpenShift {
-					err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
+				switch typeOfMaster {
+				case util.OpenShift:
+					err := rollingUpgradeDeploymentsConfigs(newCM, ocClient)
 					if err != nil {
 						glog.Errorf("failed to update DeploymentConfig: %v", err)
 					}
+				case util.Kubernetes:
+					err := rollingUpgradeDeployments(newCM, kubeClient)
+					if err != nil {
+						glog.Errorf("failed to update Deployment: %v", err)
+					}
 				}
-				err = rollingUpgradeDeployments(newCM, kubeClient)
-				if err != nil {
-					glog.Errorf("failed to update Deployment: %v", err)
-				}
-
 			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldM := oldObj.(*api.ConfigMap)
 				newCM := newObj.(*api.ConfigMap)
+				if oldM.ResourceVersion == newCM.ResourceVersion {
+					return
+				}
 
-				if oldM.ResourceVersion != newCM.ResourceVersion {
-					typeOfMaster, err := util.TypeOfMaster(kubeClient)
+				typeOfMaster, err := util.TypeOfMaster(kubeClient)
+				if err != nil {
+					glog.Fatalf("failed to create REST client config: %v", err)
+				}
+				switch typeOfMaster {
+				case util.OpenShift:
+					err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
 					if err != nil {
-						glog.Fatalf("failed to create REST client config: %s", err)
+						glog.Errorf("failed to update DeploymentConfig: %v", err)
 					}
-					if typeOfMaster == util.OpenShift {
-						err = rollingUpgradeDeploymentsConfigs(newCM, ocClient)
-						if err != nil {
-							glog.Errorf("failed to update DeploymentConfig: %v", err)
-						}
-					}
+				case util.Kubernetes:
 					err = rollingUpgradeDeployments(newCM, kubeClient)
 					if err != nil {
 						glog.Errorf("failed to update Deployment: %v", err)
@@ -118,7 +122,7 @@ func NewController(
 
 // Run starts the controller.
 func (c *Controller) Run() {
-	glog.Infof("starting configmapcontroller")
+	glog.Info("starting configmapcontroller")
 
 	go c.cmController.Run(c.stopCh)
 
@@ -126,7 +130,7 @@ func (c *Controller) Run() {
 }
 
 func (c *Controller) Stop() {
-	glog.Infof("stopping configmapcontroller")
+	glog.Info("stopping configmapcontroller")
 
 	close(c.stopCh)
 }
@@ -155,9 +159,9 @@ func rollingUpgradeDeployments(cm *api.ConfigMap, c *client.Client) error {
 	for _, d := range deployments.Items {
 		containers := d.Spec.Template.Spec.Containers
 		// match deployments with the correct annotation
-		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+		annotationValue := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
 		if annotationValue != "" {
-			values := strings.Split(annotationValue, ",")
+			values := strings.Split(annotationValue, separator)
 			matches := false
 			for _, value := range values {
 				if value == configMapName {
@@ -193,9 +197,9 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 	for _, d := range dcs.Items {
 		containers := d.Spec.Template.Spec.Containers
 		// match deployment configs with the correct annotation
-		annotationValue, _ := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
+		annotationValue := d.ObjectMeta.Annotations[updateOnChangeAnnotation]
 		if annotationValue != "" {
-			values := strings.Split(annotationValue, ",")
+			values := strings.Split(annotationValue, separator)
 			matches := false
 			for _, value := range values {
 				if value == configMapName {
@@ -218,7 +222,7 @@ func rollingUpgradeDeploymentsConfigs(cm *api.ConfigMap, oc *oclient.Client) err
 	return nil
 }
 
-// lets convert the configmap into a unique token based on the data values
+// convertConfigMapToToken converts the configmap into a unique token based on the data values
 func convertConfigMapToToken(cm *api.ConfigMap) string {
 	values := []string{}
 	for k, v := range cm.Data {
@@ -227,15 +231,18 @@ func convertConfigMapToToken(cm *api.ConfigMap) string {
 	sort.Strings(values)
 	text := strings.Join(values, ";")
 	hasher := sha256.New()
-	hasher.Write([]byte(text))
+	if _, err := hasher.Write([]byte(text)); err != nil {
+		glog.Error(err)
+	}
 	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 	return sha
 }
 
+// updateContainers returns a boolean value indicating if any containers have been updated
 func updateContainers(containers []api.Container, annotationValue, configMapVersion string) bool {
 	// we can have multiple configmaps to update
-	answer := false
-	configmaps := strings.Split(annotationValue, ",")
+	updated := false
+	configmaps := strings.Split(annotationValue, separator)
 	for _, cmNameToUpdate := range configmaps {
 		configmapEnvar := "FABRIC8_" + convertToEnvVarName(cmNameToUpdate) + "_CONFIGMAP"
 
@@ -248,7 +255,7 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 					if envs[j].Value != configMapVersion {
 						glog.Infof("Updating %s to %s", configmapEnvar, configMapVersion)
 						envs[j].Value = configMapVersion
-						answer = true
+						updated = true
 					}
 				}
 			}
@@ -259,30 +266,30 @@ func updateContainers(containers []api.Container, annotationValue, configMapVers
 					Value: configMapVersion,
 				}
 				containers[i].Env = append(containers[i].Env, e)
-				answer = true
+				updated = true
 			}
 		}
 	}
-	return answer
+	return updated
 }
 
 // convertToEnvVarName converts the given text into a usable env var
 // removing any special chars with '_'
 func convertToEnvVarName(text string) string {
 	var buffer bytes.Buffer
-	lower := strings.ToUpper(text)
+	upper := strings.ToUpper(text)
 	lastCharValid := false
-	for i := 0; i < len(lower); i++ {
-		ch := lower[i]
-		if (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
-			buffer.WriteString(string(ch))
+	for i := 0; i < len(upper); i++ {
+		ch := upper[i]
+		if ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' {
+			buffer.WriteByte(ch)
 			lastCharValid = true
-		} else {
-			if lastCharValid {
-				buffer.WriteString("_")
-			}
-			lastCharValid = false
+			continue
 		}
+		if lastCharValid {
+			buffer.WriteByte('_')
+		}
+		lastCharValid = false
 	}
 	return buffer.String()
 }
