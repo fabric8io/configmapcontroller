@@ -31,6 +31,7 @@ const (
 	Kubernetes MasterType = "Kubernetes"
 )
 
+// TypeOfMaster returns the MasterType of the given client
 func TypeOfMaster(c *client.Client) (MasterType, error) {
 	res, err := c.Get().AbsPath("").DoRaw()
 	if err != nil {
