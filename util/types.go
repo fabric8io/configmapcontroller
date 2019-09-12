@@ -40,7 +40,7 @@ func TypeOfMaster(c *client.Client) (MasterType, error) {
 	var rp api.RootPaths
 	err = json.Unmarshal(res, &rp)
 	if err != nil {
-		errors.Wrap(err, "could not discover the type of your installation")
+		return "", errors.Wrap(err, "could not discover the type of your installation")
 	}
 	for _, p := range rp.Paths {
 		if p == "/oapi" {
